@@ -1,0 +1,57 @@
+---
+title: "Run"
+output: html_document
+---
+
+```{r setup}
+library(salesforcer)
+library(tidyverse)
+library(sftp)
+
+
+```
+
+```{r MFT}
+conn <- sftp::sftp_connect(server = "mft.navex.com", 
+                   folder = "Benchmarking/Raw Data/" %>% URLencode(),
+                   username = secrets$sftp_user,
+                   password = secrets$sftp_pwd,
+                   protocol = "sftp://",
+                   port = 222,
+                   timeout = 30)
+
+files_raw <- sftp::sftp_list(sftp_connection = conn, curl_option = list(ftp.ssl = TRUE))
+
+
+```
+
+```{r load_funct}
+load_in_chunks <- function(df, size=nrow(df), FUN = function(.x, ...) {return(.x)}, object_name=NULL) {
+  #' Pushes values into Salesforce via API one column at a time from a dataframe
+  #' containing 'Id' in the first position and unique API names in the other columns
+  #'
+  #'
+  #' @param df A dataframe to be operated on by the function in chunks.
+  #' @param size The number of rows to operate on in a single chunk.
+  #' @param FUN A function that will operate on the chunk.
+  #' @param object_name API name of destination Salesforce Object.
+  #'
+  #' @return Appended result of all dataframes output by the function
+  
+  output <- data.frame()
+  for (i in seq(1, nrow(df), size)) {
+    
+    seq_size <- size
+    if ((i + seq_size) > nrow(df)) seq_size <- nrow(df) - i + 1
+    
+    j <- i + seq_size
+    update <- df %>% slice(i:j) %>% FUN(object_name)
+    output <- output %>% bind_rows(update)
+    cat("loading rows", i, "through", j, "\n", nrow(df) - j, "rows remain\n")
+    
+  }
+  
+  return(output)
+  
+}
+```
