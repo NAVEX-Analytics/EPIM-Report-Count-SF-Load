@@ -1,14 +1,19 @@
 ---
 title: "Run"
 output: html_document
+params:
+  last_month: "2025-01-01" # start day of most recent month of files, typically first of previous month
 ---
 
 ```{r setup}
 library(salesforcer)
 library(tidyverse)
 library(sftp)
+library(tools)
+library(Hmisc)
 
-
+secrets <- yaml::read_yaml("secrets.yml")
+comp_pwd <- secrets$compressed_pwd
 ```
 
 ```{r MFT}
@@ -20,12 +25,112 @@ conn <- sftp::sftp_connect(server = "mft.navex.com",
                    port = 222,
                    timeout = 30)
 
-files_raw <- sftp::sftp_list(sftp_connection = conn, curl_option = list(ftp.ssl = TRUE))
+# YTD First Push
+files_raw <- sftp_list(sftp_connection = conn, curl_option = list(ftp.ssl = TRUE)) %>%
+  filter(grepl("_2025-", name))
 
+sftp_download(files_raw$name, tofolder=paste0(getwd(), "\\sources"), sftp_connection = conn)
+
+unzip_us <- system(paste0("7z x sources/US_EthicsPoint_BenchmarkCases_", last_month, ".zip -oref -p", comp_pwd))
+unzip_eu <- system(paste0("7z x sources/EU_EthicsPoint_BenchmarkCases_", last_month, ".zip -oref -p", comp_pwd))
+
+us_source <- read_csv(paste0("ref/US_EthicsPoint_BenchmarkCases_", last_month, ".csv")) %>% 
+  mutate(Source = "US",
+         across(contains("Date"), ~ as.Date(gsub("\\s.+", "", .x), format="%m/%d/%Y")))
+
+eu_source <- read_csv(paste0("ref/EU_EthicsPoint_BenchmarkCases_", last_month, ".csv")) %>%
+  mutate(Source = "EU",
+           across(contains("Date"), ~ as.Date(gsub("\\s.+", "", .x), format="%m/%d/%Y")))
+
+clean_reports <- us_source %>% 
+  bind_rows(eu_source)
+```
+
+```{r funct}
+
+read_db_files <- function(file_paths, parser=function(.x){read_csv(.x, col_names = TRUE, show_col_types = FALSE, trim_ws = TRUE) %>% return()}, bind=TRUE) {
+  
+  df_list <- list()
+  
+  for (file_path in file_paths) {
+    
+    # Extract the filename without the path or extension
+    file_name <- file_path %>% basename() %>% file_path_sans_ext() %>% str_extract("[[:letter:]\\-]+")
+    
+    print(file_name)
+    
+    # Check if the file path exists
+    if (file.exists(file_path)) {
+      
+      print(file_path)
+      
+      # Read the CSV file into a data frame
+      data <- parser(file_path) %>% 
+        mutate(Server = case_when(grepl("EU|wb", file_name) ~ "EU",
+                                  TRUE ~ "US"))
+      
+      # Add the data frame to the list with the filename as the key
+      df_list[[file_name]] <- data
+      
+    } else {
+      
+      # File path does not exist
+      cat("File not found:", file_path, "\n")
+      
+      return(data.frame())
+
+    }
+    
+  }
+  
+  if (bind==TRUE) {
+    
+    cat("\nAppending", df_list %>% names() %>% paste0(collapse = ", "))
+    df <- df_list %>% bind_rows()
+    cat("\nReturning data frame\n")
+    
+    
+  } else {
+    
+    df <- df_list
+    cat("\nReturning named list of data frames\n")
+    
+  }
+  
+  # Return the list of data frames
+  return(df)
+}
 
 ```
 
-```{r load_funct}
+```{r SF_match}
+app_configs <- sf_query("SELECT Id,
+                        Name,
+                        EP_Client_Id__c,
+                        Account__c,
+                        EPIM_Reports_YTD__c,
+                        EPIM_Reports_Prior_Month__c
+                        FROM Platform_Configuration__c
+                        WHERE
+                        Active__c = TRUE
+                        AND Account__r.Test_Account__c = FALSE
+                        AND Name = 'EthicsPoint'")#
+                        #AND EP_Client_ID__c != null")
+
+merge <- app_configs %>% 
+  left_join(clean_reports %>% 
+              filter(Case_DateOpened >= last_month & Case_DateOpened < ymd(last_month) %m+% months(1)) %>% 
+              group_by(ClientId) %>% 
+              reframe(reports_last_month = n()), by=c("EP_Client_Id__c"="ClientId")) %>% 
+  mutate(EPIM_Reports_Prior_Month__c = replace_na(reports_last_month, 0),
+         # UPDATE FOR FEB VALUES to add next month to YTD 
+         # EPIM_Reports_YTD__c = EPIM_Reports_Prior_Month__c)
+
+#print(paste0("Num of reports total last month: ", merge %>% summarize(sum=sum(EPIM_Reports_Prior_Month__c)), " Running Total: ", merge %>% summarize(sum=sum(EPIM_Reports_YTD__c)), " Number of Client IDs with reports: ", merge %>% filter(EPIM_Reports_Prior_Month__c > 0) %>% n(), " Without: ", merge %>% filter(EPIM_Reports_Prior_Month__c == 0) %>% n()))        
+
+```
+
+```{r load_function}
 load_in_chunks <- function(df, size=nrow(df), FUN = function(.x, ...) {return(.x)}, object_name=NULL) {
   #' Pushes values into Salesforce via API one column at a time from a dataframe
   #' containing 'Id' in the first position and unique API names in the other columns
@@ -54,4 +159,21 @@ load_in_chunks <- function(df, size=nrow(df), FUN = function(.x, ...) {return(.x
   return(output)
   
 }
+
+```
+
+```{r update_appconfigs}
+
+# Test 1
+update_test <- merge[1, ] %>% 
+  select(Id, starts_with("EPIM"))
+
+update1 <- update_test %>% 
+  load_in_chunks(., size=1, sf_update, object_name =  "Platform_Configuration__c")
+
+update_app_config_sheet <- merge %>% 
+  select(Id, starts_with("EPIM")) %>% 
+  load_in_chunks(., size = 25, sf_update, object_name="Platform_Configuration__c")
+
+
 ```
