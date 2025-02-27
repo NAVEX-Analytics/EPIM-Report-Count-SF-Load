@@ -165,11 +165,11 @@ load_in_chunks <- function(df, size=nrow(df), FUN = function(.x, ...) {return(.x
 ```{r update_appconfigs}
 
 # Test 1
-update_test <- merge[1, ] %>% 
-  select(Id, starts_with("EPIM"))
-
-update1 <- update_test %>% 
-  load_in_chunks(., size=1, sf_update, object_name =  "Platform_Configuration__c")
+# update_test <- merge[1, ] %>% 
+#   select(Id, starts_with("EPIM"))
+# 
+# update1 <- update_test %>% 
+#   load_in_chunks(., size=1, sf_update, object_name =  "Platform_Configuration__c")
 
 update_app_config_sheet <- merge %>% 
   select(Id, starts_with("EPIM")) %>% 
