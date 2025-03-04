@@ -2,7 +2,7 @@
 title: "Run"
 output: html_document
 params:
-  last_month: "2025-01-01" # start day of most recent month of files, typically first of previous month
+  current_month: "2025-03-01" # start day of most recent month of files, typically first of current month
 ---
 
 ```{r setup}
@@ -10,10 +10,10 @@ library(salesforcer)
 library(tidyverse)
 library(sftp)
 library(tools)
-library(Hmisc)
 
 secrets <- yaml::read_yaml("secrets.yml")
 comp_pwd <- secrets$compressed_pwd
+this_month <- params$current_month
 ```
 
 ```{r MFT}
@@ -27,18 +27,22 @@ conn <- sftp::sftp_connect(server = "mft.navex.com",
 
 # YTD First Push
 files_raw <- sftp_list(sftp_connection = conn, curl_option = list(ftp.ssl = TRUE)) %>%
-  filter(grepl("_2025-", name))
+  filter(grepl(paste0("_", this_month), name))
 
 sftp_download(files_raw$name, tofolder=paste0(getwd(), "\\sources"), sftp_connection = conn)
 
-unzip_us <- system(paste0("7z x sources/US_EthicsPoint_BenchmarkCases_", last_month, ".zip -oref -p", comp_pwd))
-unzip_eu <- system(paste0("7z x sources/EU_EthicsPoint_BenchmarkCases_", last_month, ".zip -oref -p", comp_pwd))
+##
+# old_path <- Sys.getenv("PATH")
+# Sys.setenv(PATH = paste(old_path,"C:\\Program Files\\7-Zip\\", sep = ";"))
+# Sys.getenv("PATH")
+unzip_us <- system(paste0("7z x sources/US_EthicsPoint_BenchmarkCases_", this_month, ".zip -oref -p", comp_pwd))
+unzip_eu <- system(paste0("7z x sources/EU_EthicsPoint_BenchmarkCases_", this_month, ".zip -oref -p", comp_pwd))
 
-us_source <- read_csv(paste0("ref/US_EthicsPoint_BenchmarkCases_", last_month, ".csv")) %>% 
+us_source <- read_csv(paste0("ref/US_EthicsPoint_BenchmarkCases_", this_month, ".csv")) %>% 
   mutate(Source = "US",
          across(contains("Date"), ~ as.Date(gsub("\\s.+", "", .x), format="%m/%d/%Y")))
 
-eu_source <- read_csv(paste0("ref/EU_EthicsPoint_BenchmarkCases_", last_month, ".csv")) %>%
+eu_source <- read_csv(paste0("ref/EU_EthicsPoint_BenchmarkCases_", this_month, ".csv")) %>%
   mutate(Source = "EU",
            across(contains("Date"), ~ as.Date(gsub("\\s.+", "", .x), format="%m/%d/%Y")))
 
@@ -117,16 +121,16 @@ app_configs <- sf_query("SELECT Id,
                         AND Name = 'EthicsPoint'")#
                         #AND EP_Client_ID__c != null")
 
-merge <- app_configs %>% 
+merge_with_sf <- app_configs %>% 
+  mutate(EP_Client_Id__c = as.double(EP_Client_Id__c)) %>% 
   left_join(clean_reports %>% 
-              filter(Case_DateOpened >= last_month & Case_DateOpened < ymd(last_month) %m+% months(1)) %>% 
+              filter(Case_DateOpened >= ymd(this_month) %m+% months(-1) & Case_DateOpened < ymd(this_month)) %>% 
               group_by(ClientId) %>% 
               reframe(reports_last_month = n()), by=c("EP_Client_Id__c"="ClientId")) %>% 
   mutate(EPIM_Reports_Prior_Month__c = replace_na(reports_last_month, 0),
-         # UPDATE FOR FEB VALUES to add next month to YTD 
-         # EPIM_Reports_YTD__c = EPIM_Reports_Prior_Month__c)
+         EPIM_Reports_YTD__c = EPIM_Reports_Prior_Month__c + EPIM_Reports_YTD__c)
 
-#print(paste0("Num of reports total last month: ", merge %>% summarize(sum=sum(EPIM_Reports_Prior_Month__c)), " Running Total: ", merge %>% summarize(sum=sum(EPIM_Reports_YTD__c)), " Number of Client IDs with reports: ", merge %>% filter(EPIM_Reports_Prior_Month__c > 0) %>% n(), " Without: ", merge %>% filter(EPIM_Reports_Prior_Month__c == 0) %>% n()))        
+print(paste0("Num of reports total last month: ", merge_with_sf %>% reframe(summed=sum(EPIM_Reports_Prior_Month__c, na.rm=TRUE)), " Running Total: ", merge_with_sf %>% reframe(summed=sum(EPIM_Reports_YTD__c, na.rm = TRUE)), " Number of Client IDs with reports: ", merge_with_sf %>% filter(EPIM_Reports_Prior_Month__c > 0) %>% count(), " Without: ", merge_with_sf %>% filter(EPIM_Reports_Prior_Month__c == 0) %>% count()))        
 
 ```
 
@@ -171,9 +175,9 @@ load_in_chunks <- function(df, size=nrow(df), FUN = function(.x, ...) {return(.x
 # update1 <- update_test %>% 
 #   load_in_chunks(., size=1, sf_update, object_name =  "Platform_Configuration__c")
 
-update_app_config_sheet <- merge %>% 
+update_app_config_sheet <- merge_with_sf %>% 
   select(Id, starts_with("EPIM")) %>% 
-  load_in_chunks(., size = 25, sf_update, object_name="Platform_Configuration__c")
+  load_in_chunks(., size = 50, sf_update, object_name="Platform_Configuration__c")
 
 
 ```
