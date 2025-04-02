@@ -31,12 +31,20 @@ files_raw <- sftp_list(sftp_connection = conn, curl_option = list(ftp.ssl = TRUE
 
 sftp_download(files_raw$name, tofolder=paste0(getwd(), "\\sources"), sftp_connection = conn)
 
-##
-# old_path <- Sys.getenv("PATH")
-# Sys.setenv(PATH = paste(old_path,"C:\\Program Files\\7-Zip\\", sep = ";"))
-# Sys.getenv("PATH")
+## Set PATH Variable to Identify 7-Zip in locale
+old_path <- Sys.getenv("PATH")
+if(!grepl("7-Zip", old_path)){
+  print("7-Zip not in PATH, amending to variable")
+  Sys.setenv(PATH = paste(old_path,"C:\\Program Files\\7-Zip\\", sep = ";"))
+  Sys.getenv("PATH")
+} else {Sys.getenv("PATH")}
+
 unzip_us <- system(paste0("7z x sources/US_EthicsPoint_BenchmarkCases_", this_month, ".zip -oref -p", comp_pwd))
 unzip_eu <- system(paste0("7z x sources/EU_EthicsPoint_BenchmarkCases_", this_month, ".zip -oref -p", comp_pwd))
+
+if(unzip_us != 0 | unzip_eu != 0){
+  print("Unable to Parse All Zip Files, Check PATH to 7-Zip")
+}
 
 us_source <- read_csv(paste0("ref/US_EthicsPoint_BenchmarkCases_", this_month, ".csv")) %>% 
   mutate(Source = "US",
@@ -112,14 +120,14 @@ app_configs <- sf_query("SELECT Id,
                         Name,
                         EP_Client_Id__c,
                         Account__c,
+                        Active__c,
                         EPIM_Reports_YTD__c,
                         EPIM_Reports_Prior_Month__c
                         FROM Platform_Configuration__c
-                        WHERE
-                        Active__c = TRUE
-                        AND Account__r.Test_Account__c = FALSE
+                        WHERE Account__r.Test_Account__c = FALSE
                         AND Name = 'EthicsPoint'")#
-                        #AND EP_Client_ID__c != null")
+                        #AND EP_Client_ID__c != null
+                        #AND Active__c = TRUE")
 
 merge_with_sf <- app_configs %>% 
   mutate(EP_Client_Id__c = as.double(EP_Client_Id__c)) %>% 
@@ -128,9 +136,9 @@ merge_with_sf <- app_configs %>%
               group_by(ClientId) %>% 
               reframe(reports_last_month = n()), by=c("EP_Client_Id__c"="ClientId")) %>% 
   mutate(EPIM_Reports_Prior_Month__c = replace_na(reports_last_month, 0),
-         EPIM_Reports_YTD__c = EPIM_Reports_Prior_Month__c + EPIM_Reports_YTD__c)
+         EPIM_Reports_YTD__c = replace_na(EPIM_Reports_Prior_Month__c + EPIM_Reports_YTD__c, 0))
 
-print(paste0("Num of reports total last month: ", merge_with_sf %>% reframe(summed=sum(EPIM_Reports_Prior_Month__c, na.rm=TRUE)), " Running Total: ", merge_with_sf %>% reframe(summed=sum(EPIM_Reports_YTD__c, na.rm = TRUE)), " Number of Client IDs with reports: ", merge_with_sf %>% filter(EPIM_Reports_Prior_Month__c > 0) %>% count(), " Without: ", merge_with_sf %>% filter(EPIM_Reports_Prior_Month__c == 0) %>% count()))        
+print(paste0("Num of reports total last month: ", merge_with_sf %>% reframe(summed=sum(EPIM_Reports_Prior_Month__c, na.rm=TRUE)), " Running Total: ", merge_with_sf %>% reframe(summed=sum(EPIM_Reports_YTD__c, na.rm = TRUE)), " Number of Client IDs with reports last month: ", merge_with_sf %>% filter(EPIM_Reports_Prior_Month__c > 0) %>% count(), " Without reports last month: ", merge_with_sf %>% filter(EPIM_Reports_Prior_Month__c == 0) %>% count()))        
 
 ```
 
