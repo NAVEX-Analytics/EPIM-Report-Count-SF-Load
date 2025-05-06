@@ -2,7 +2,7 @@
 title: "Run"
 output: html_document
 params:
-  current_month: "2025-03-01" # start day of most recent month of files, typically first of current month
+  current_month: "2025-05-01" # start day of most recent month of files, typically first of current month
 ---
 
 ```{r setup}
@@ -116,6 +116,10 @@ read_db_files <- function(file_paths, parser=function(.x){read_csv(.x, col_names
 ```
 
 ```{r SF_match}
+sf_auth(username = secrets$username,
+        password = secrets$password,
+        security_token = secrets$security_token)
+
 app_configs <- sf_query("SELECT Id,
                         Name,
                         EP_Client_Id__c,
