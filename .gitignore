@@ -34,3 +34,5 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 .httr-oauth-salesforcer
+
+secrets.yml
